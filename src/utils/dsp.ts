@@ -1,5 +1,16 @@
 const EPS = 1e-8;
 
+type Complex = {
+  re: number;
+  im: number;
+};
+
+export type CwtResult = {
+  scalogram: number[][];
+  scales: number[];
+  frequencies: number[];
+};
+
 export const movingAverage = (values: number[], windowSize: number): number[] => {
   if (values.length === 0 || windowSize <= 1) {
     return [...values];
@@ -19,6 +30,233 @@ export const movingAverage = (values: number[], windowSize: number): number[] =>
   }
 
   return out;
+};
+
+const nextPowerOfTwo = (value: number): number => {
+  if (value <= 1) {
+    return 1;
+  }
+
+  return 1 << Math.ceil(Math.log2(value));
+};
+
+const createComplex = (re: number, im = 0): Complex => ({ re, im });
+
+const complexAdd = (a: Complex, b: Complex): Complex => ({
+  re: a.re + b.re,
+  im: a.im + b.im,
+});
+
+const complexSub = (a: Complex, b: Complex): Complex => ({
+  re: a.re - b.re,
+  im: a.im - b.im,
+});
+
+const complexMul = (a: Complex, b: Complex): Complex => ({
+  re: a.re * b.re - a.im * b.im,
+  im: a.re * b.im + a.im * b.re,
+});
+
+const complexConj = (a: Complex): Complex => ({
+  re: a.re,
+  im: -a.im,
+});
+
+const fft = (input: Complex[], inverse = false): Complex[] => {
+  const n = input.length;
+  if (n === 1) {
+    return [createComplex(input[0].re, input[0].im)];
+  }
+
+  if ((n & (n - 1)) !== 0) {
+    throw new Error("FFT input length must be a power of two");
+  }
+
+  const output = input.map((value) => createComplex(value.re, value.im));
+
+  let j = 0;
+  for (let i = 1; i < n; i += 1) {
+    let bit = n >> 1;
+    while (j & bit) {
+      j ^= bit;
+      bit >>= 1;
+    }
+    j ^= bit;
+
+    if (i < j) {
+      const temp = output[i];
+      output[i] = output[j];
+      output[j] = temp;
+    }
+  }
+
+  for (let len = 2; len <= n; len <<= 1) {
+    const angle = (2 * Math.PI) / len * (inverse ? 1 : -1);
+    const wLen = createComplex(Math.cos(angle), Math.sin(angle));
+
+    for (let i = 0; i < n; i += len) {
+      let w = createComplex(1, 0);
+      for (let k = 0; k < len / 2; k += 1) {
+        const u = output[i + k];
+        const v = complexMul(output[i + k + len / 2], w);
+        output[i + k] = complexAdd(u, v);
+        output[i + k + len / 2] = complexSub(u, v);
+        w = complexMul(w, wLen);
+      }
+    }
+  }
+
+  if (inverse) {
+    for (let i = 0; i < n; i += 1) {
+      output[i].re /= n;
+      output[i].im /= n;
+    }
+  }
+
+  return output;
+};
+
+const inverseFft = (input: Complex[]): Complex[] => {
+  return fft(input, true);
+};
+
+const zScore = (values: number[]): number[] => {
+  const m = mean(values);
+  const s = std(values);
+
+  if (s <= EPS) {
+    return values.map(() => 0);
+  }
+
+  return values.map((value) => (value - m) / s);
+};
+
+export const normalizeSignal = (
+  signal: number[],
+  windowSize = 32,
+): number[] => {
+  if (signal.length === 0) {
+    return [];
+  }
+
+  if (windowSize <= 1) {
+    return zScore(signal);
+  }
+
+  const normalized = new Array<number>(signal.length).fill(0);
+
+  for (let i = 0; i < signal.length; i += 1) {
+    const start = Math.max(0, i - windowSize + 1);
+    const window = signal.slice(start, i + 1);
+    const localMean = mean(window);
+    const localStd = std(window);
+
+    normalized[i] = localStd > EPS ? (signal[i] - localMean) / localStd : 0;
+  }
+
+  return normalized;
+};
+
+const resizeSeries = (values: number[], targetLength: number): number[] => {
+  if (values.length === 0 || targetLength <= 0) {
+    return [];
+  }
+
+  if (values.length === targetLength) {
+    return [...values];
+  }
+
+  if (targetLength === 1) {
+    return [values[0]];
+  }
+
+  const resized = new Array<number>(targetLength).fill(0);
+  const maxIndex = values.length - 1;
+
+  for (let i = 0; i < targetLength; i += 1) {
+    const position = (i * maxIndex) / (targetLength - 1);
+    const left = Math.floor(position);
+    const right = Math.min(maxIndex, Math.ceil(position));
+    const weight = position - left;
+    resized[i] = values[left] * (1 - weight) + values[right] * weight;
+  }
+
+  return resized;
+};
+
+const buildMorletWavelet = (
+  length: number,
+  scaleSamples: number,
+  w0 = 6,
+): Complex[] => {
+  const center = Math.floor(length / 2);
+  const coefficient = Math.pow(Math.PI, -0.25) / Math.sqrt(scaleSamples + EPS);
+
+  const wavelet = new Array<Complex>(length);
+  for (let i = 0; i < length; i += 1) {
+    const u = (i - center) / (scaleSamples + EPS);
+    const envelope = Math.exp(-0.5 * u * u);
+    const phase = -w0 * u;
+
+    wavelet[i] = createComplex(
+      coefficient * envelope * Math.cos(phase),
+      coefficient * envelope * Math.sin(phase),
+    );
+  }
+
+  return wavelet;
+};
+
+const scaleToFrequency = (scaleSamples: number, sampleRate: number, w0 = 6): number => {
+  return (w0 * sampleRate) / (2 * Math.PI * (scaleSamples + EPS));
+};
+
+export const performCWT = (
+  signal: number[],
+  sampleRate = 30,
+  scaleCount = 64,
+  outputResolution = 128,
+): CwtResult => {
+  if (signal.length === 0) {
+    return {
+      scalogram: [],
+      scales: [],
+      frequencies: [],
+    };
+  }
+
+  const normalized = normalizeSignal(signal, Math.min(64, Math.max(8, Math.floor(signal.length / 4))));
+  const paddedLength = nextPowerOfTwo(normalized.length * 2);
+  const zeroPaddedSignal = new Array<Complex>(paddedLength).fill(null as unknown as Complex).map(
+    (_, index) => createComplex(index < normalized.length ? normalized[index] : 0, 0),
+  );
+  const signalFft = fft(zeroPaddedSignal);
+
+  const minFrequencyHz = 0.6;
+  const maxFrequencyHz = 4.5;
+  const scales = Array.from({ length: scaleCount }, (_, index) => {
+    const fraction = scaleCount === 1 ? 0 : index / (scaleCount - 1);
+    const frequency = minFrequencyHz + (maxFrequencyHz - minFrequencyHz) * fraction;
+    return (6 * sampleRate) / (2 * Math.PI * frequency);
+  });
+
+  const frequencies = scales.map((scale) => scaleToFrequency(scale, sampleRate));
+  const scalogram: number[][] = [];
+
+  for (const scale of scales) {
+    const wavelet = buildMorletWavelet(paddedLength, scale);
+    const waveletFft = fft(wavelet);
+    const spectrum = waveletFft.map((value, index) => complexMul(signalFft[index], complexConj(value)));
+    const coefficients = inverseFft(spectrum);
+    const magnitude = coefficients.slice(0, normalized.length).map((value) => Math.hypot(value.re, value.im));
+    scalogram.push(resizeSeries(magnitude, outputResolution));
+  }
+
+  return {
+    scalogram,
+    scales,
+    frequencies,
+  };
 };
 
 const quantile = (sortedValues: number[], q: number): number => {
@@ -73,7 +311,7 @@ export const std = (values: number[]): number => {
   }
   const m = mean(values);
   const variance =
-    values.reduce((acc, v) => acc + (v - m) * (v - m), 0) / (values.length - 1);
+    values.reduce((acc, v) => acc + (v - m) * (v - m), 0) / values.length;
   return Math.sqrt(Math.max(0, variance));
 };
 

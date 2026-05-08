@@ -22,6 +22,47 @@ export type HrvMetrics = {
   coherence: number;
 };
 
+export type BpMetrics = {
+  sbp: number | null;
+  dbp: number | null;
+  map: number | null;
+};
+
+export type SignalSeries = {
+  t: number[];
+  y: number[];
+};
+
+export type RppgTelemetry = {
+  rgbRaw: {
+    t: number[];
+    r: number[];
+    g: number[];
+    b: number[];
+  };
+  rgbSmoothed: {
+    t: number[];
+    r: number[];
+    g: number[];
+    b: number[];
+  };
+  pos: SignalSeries;
+  interpolated: SignalSeries;
+  filtered: SignalSeries;
+  cwt?: {
+    scalogram: number[][];
+    scales: number[];
+    frequencies: number[];
+  };
+  bpWaveform?: SignalSeries;
+};
+
+export type RppgResult = {
+  hrv: HrvMetrics;
+  bp: BpMetrics;
+  telemetry: RppgTelemetry;
+};
+
 export type WavePoint = {
   t: number;
   v: number;
