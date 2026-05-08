@@ -17,7 +17,15 @@ export default function Home() {
   const { videoRef, isRunning, error: cameraError, startCamera, stopCamera } =
     useCamera();
   const { ready: mediaPipeReady, error: mediaPipeError, detect } = useMediaPipe();
-  const { metrics, waveform, status, pushSample, reset } = useRppgWorker();
+  const {
+    metrics,
+    bpMetrics,
+    waveform,
+    bpWaveform,
+    status,
+    pushSample,
+    reset,
+  } = useRppgWorker();
 
   useEffect(() => {
     analysisCanvasRef.current = document.createElement("canvas");
@@ -97,9 +105,13 @@ export default function Home() {
         ? "Loading MediaPipe model"
         : !isRunning
           ? "Idle"
-          : status.calibrated
-            ? "Calibrated"
-            : "Calibrating";
+          : !status.bpModelReady && !status.bpModelError
+            ? "Calibrating rPPG and waiting for BP model"
+            : status.bpModelError
+              ? "BP model unavailable"
+              : status.calibrated
+                ? "Calibrated"
+                : "Calibrating";
 
   return (
     <main className="mx-auto flex w-full max-w-7xl flex-col gap-6 px-4 py-6 md:px-6">
@@ -125,10 +137,29 @@ export default function Home() {
           statusText={statusText}
         />
 
-        <MetricsDisplay metrics={metrics} calibrated={status.calibrated} />
+        <MetricsDisplay
+          metrics={metrics}
+          bpMetrics={bpMetrics}
+          calibrated={status.calibrated}
+          bpModelReady={status.bpModelReady}
+          bpModelError={status.bpModelError}
+        />
       </div>
 
-      <PulseChart data={waveform} />
+      <PulseChart
+        data={waveform}
+        title="Filtered rPPG / BVP Waveform"
+        emptyLabel="Waiting for filtered BVP signal..."
+      />
+      <PulseChart
+        data={bpWaveform}
+        title="Estimated Blood Pressure Waveform"
+        emptyLabel={
+          status.bpModelReady
+            ? "Waiting for BP inference output..."
+            : "BP model not configured or still loading"
+        }
+      />
     </main>
   );
 }
