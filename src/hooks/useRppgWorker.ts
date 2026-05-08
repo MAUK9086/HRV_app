@@ -44,7 +44,7 @@ const ZERO_BP_METRICS: BpMetrics = {
   map: null,
 };
 
-const BP_DISPLAY_MAX_SAMPLES = 600;
+const BP_DISPLAY_MAX_SAMPLES = 2000;
 
 export const useRppgWorker = (): UseRppgWorkerReturn => {
   const workerRef = useRef<Worker | null>(null);
@@ -94,8 +94,8 @@ export const useRppgWorker = (): UseRppgWorkerReturn => {
               return incoming.slice(-BP_DISPLAY_MAX_SAMPLES);
             }
 
-            // Use ~200 samples for overlap (2.06s at ~100 Hz)
-            const overlapSamples = Math.min(200, previous.length, incoming.length);
+            // Use 125-sample overlap (0.5s overlap window)
+            const overlapSamples = Math.min(125, previous.length, incoming.length);
 
             // Calculate baseline means for alignment
             const prevValues = previous.map((p) => p.v);

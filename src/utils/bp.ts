@@ -89,8 +89,8 @@ export const blendBpWaveform = (
 export const stitchBpWaveform = (
   previous: number[],
   incoming: number[],
-  overlapSamples = 50,
-  maxSamples = 600,
+  overlapSamples = 125,
+  maxSamples = 2000,
 ): number[] => {
   if (incoming.length === 0) {
     return previous.slice(-maxSamples);
@@ -100,10 +100,33 @@ export const stitchBpWaveform = (
     return incoming.slice(-maxSamples);
   }
 
+  // Calculate baseline alignment: DC offset between overlapping samples
   const overlap = Math.max(0, Math.min(overlapSamples, previous.length, incoming.length));
+  let overlapPrevMean = 0;
+  let overlapIncomingMean = 0;
+
+  if (overlap > 0) {
+    for (let i = 0; i < overlap; i += 1) {
+      const prevIdx = previous.length - overlap + i;
+      if (prevIdx >= 0 && prevIdx < previous.length) {
+        overlapPrevMean += previous[prevIdx];
+      }
+      if (i < incoming.length) {
+        overlapIncomingMean += incoming[i];
+      }
+    }
+    overlapPrevMean /= overlap;
+    overlapIncomingMean /= overlap;
+  }
+
+  // Baseline align: subtract DC offset from incoming
+  const dcOffset = overlapIncomingMean - overlapPrevMean;
+  const alignedIncoming = incoming.map((v) => v - dcOffset);
+
+  // Blend overlap region
   const prefix = previous.slice(0, Math.max(0, previous.length - overlap));
-  const blended = blendBpWaveform(previous, incoming, overlap);
-  const stitched: number[] = [...prefix, ...blended, ...incoming.slice(overlap)];
+  const blended = blendBpWaveform(previous, alignedIncoming, overlap);
+  const stitched: number[] = [...prefix, ...blended, ...alignedIncoming.slice(overlap)];
 
   return stitched.slice(-maxSamples);
 };
