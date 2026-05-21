@@ -5,13 +5,16 @@ import {
   cubicSplineInterpolate,
   detectPeaks,
   deriveIbisMs,
+  detrendSignal,
+  extractGreenBvp,
+  globalZScoreNormalize,
   movingAverage,
   posBvp,
   performCWT,
   refineIbis,
   sanitizeForSpline,
-  normalizeSignal,
 } from "@/utils/dsp";
+import type { CwtResult } from "@/utils/dsp";
 import { calculateHrvMetrics } from "@/utils/hrv";
 import { estimateBpWaveformMetrics, reconstructBpWaveform, stitchBpWaveform } from "@/utils/bp";
 import type { BpMetrics, RgbSample, RppgResult, RppgTelemetry, WavePoint } from "@/utils/types";
@@ -51,7 +54,8 @@ let modelLoadPromise: Promise<void> | null = null;
 let processing = false;
 let queued = false;
 let meanBpEstimateMmHg = DEFAULT_MEAN_BP_MMHG;
-let bpMetricBuffer: number[] = [];
+let bpDisplayBuffer: number[] = [];
+  let bpMetricBuffer: number[] = [];
 
 const trimBuffer = (latestTs: number): void => {
   const threshold = latestTs - RAW_BUFFER_SECONDS * 1000;
@@ -153,26 +157,15 @@ const ensureBpModel = async (): Promise<boolean> => {
 };
 
 const inferBpWaveform = async (
-  signal: number[],
+  cwt: CwtResult,
   meanOffsetMmHg: number,
-): Promise<{ waveform: number[]; cwt: ReturnType<typeof performCWT> }> => {
-  const cwt = performCWT(signal, TARGET_FS, BP_CWT_RESOLUTION, BP_CWT_RESOLUTION);
-
+): Promise<number[]> => {
   if (!bpModel || cwt.scalogram.length === 0 || cwt.scalogram[0].length === 0) {
-    return {
-      waveform: [],
-      cwt,
-    };
+    return [];
   }
 
   const input = buildModelInput(cwt.scalogram);
-
-  if (!input) {
-    return {
-      waveform: [],
-      cwt,
-    };
-  }
+  if (!input) return [];
 
   try {
     const output = bpModel.predict(input);
@@ -188,27 +181,37 @@ const inferBpWaveform = async (
       (tensor as tf.Tensor).dispose();
     }
 
-    const waveform = reconstructBpWaveform(realPlane, imagPlane, TARGET_FS, {
+    return reconstructBpWaveform(realPlane, imagPlane, 100, {
       minFrequencyHz: 0.6,
       maxFrequencyHz: 4.5,
       meanOffsetMmHg,
     });
-
-    return {
-      waveform,
-      cwt,
-    };
   } finally {
     input.dispose();
   }
 };
 
-const extractBpWindow = (filtered: number[], t: number[]): { signal: number[]; time: number[] } => {
-  const targetLength = Math.max(1, Math.min(filtered.length, Math.floor(TARGET_FS * BP_WINDOW_SECONDS)));
-  return {
-    signal: filtered.slice(-targetLength),
-    time: t.slice(-targetLength),
-  };
+const prepareBpModelInput = async (
+  rgbWindow: RgbSample[],
+): Promise<{ cwt: CwtResult; time: number[] } | null> => {
+  const { timestamps, values: greenRaw } = extractGreenBvp(rgbWindow);
+  if (timestamps.length < 10) return null;
+
+  const tSec = timestamps.map((t) => t / 1000);
+  const sanitized = sanitizeForSpline(greenRaw, 2.5, 3);
+  if (sanitized.length < 5) return null;
+
+  const interpolated = cubicSplineInterpolate(tSec, sanitized, 100);
+  if (interpolated.y.length < 50) return null;
+
+  console.debug("[BP-p1] green samples:", rgbWindow.length, "interpolated@100Hz:", interpolated.y.length);
+
+  const detrended = detrendSignal(interpolated.y, 0.25);
+  // Note: performCWT applies its own internal local normalization;
+  // globalZScoreNormalize here primes the signal before that step.
+  const normalized = globalZScoreNormalize(detrended);
+  const cwt = performCWT(normalized, 100, BP_CWT_RESOLUTION, BP_CWT_RESOLUTION);
+  return { cwt, time: interpolated.t };
 };
 
 const processWindow = async (): Promise<void> => {
@@ -282,34 +285,45 @@ const processWindow = async (): Promise<void> => {
   const interpolatedSeries = downsampleSeries(interpolated.y, interpolated.t);
   const filteredSeries = downsampleSeries(filtered, interpolated.t);
 
-  const bpWindow = extractBpWindow(filtered, interpolated.t);
+  const bpRgbWindow = rgbBuffer.filter((s) => s.timestamp >= latestTs - BP_WINDOW_SECONDS * 1000);
   let bp: BpMetrics = {
     sbp: null,
     dbp: null,
     map: null,
   };
   let bpWaveform: number[] = [];
-  let cwt: ReturnType<typeof performCWT> | undefined;
+  let cwt: CwtResult | undefined;
+  let bpInputTime: number[] | undefined;
 
   if (await ensureBpModel()) {
-    const bpInput = normalizeSignal(bpWindow.signal, Math.min(32, Math.max(8, Math.floor(bpWindow.signal.length / 4))));
-    const inference = await inferBpWaveform(bpInput, meanBpEstimateMmHg);
-    const bpDisplaySegment = inference.waveform;
-    cwt = inference.cwt;
+    const bpInput = await prepareBpModelInput(bpRgbWindow);
+    cwt = bpInput?.cwt;
+    bpInputTime = bpInput?.time;
 
-    if (bpDisplaySegment.length > 0) {
-      bpMetricBuffer = stitchBpWaveform(bpMetricBuffer, bpDisplaySegment, BP_STITCH_OVERLAP_SAMPLES, BP_DISPLAY_SAMPLES);
-      const bpMetrics = estimateBpWaveformMetrics(bpMetricBuffer, 100);
-      bpWaveform = bpDisplaySegment;
-      bp = {
-        sbp: bpMetrics.sbp,
-        dbp: bpMetrics.dbp,
-        map: bpMetrics.map,
-      };
+    if (bpInput) {
+      const bpDisplaySegment = await inferBpWaveform(bpInput.cwt, meanBpEstimateMmHg);
 
-      if (bpMetrics.map !== null && Number.isFinite(bpMetrics.map)) {
-        // Apply EMA smoothing to stabilize the baseline across inferences
-        meanBpEstimateMmHg = BP_MEAN_EMA_ALPHA * bpMetrics.map + (1 - BP_MEAN_EMA_ALPHA) * meanBpEstimateMmHg;
+      if (bpDisplaySegment.length > 0) {
+        // Decouple display and metric buffers:
+        // Display buffer: raw waveform stitched for smooth visual continuity
+        bpDisplayBuffer = stitchBpWaveform(bpDisplayBuffer, bpDisplaySegment, BP_STITCH_OVERLAP_SAMPLES, BP_DISPLAY_SAMPLES);
+
+        // Metric buffer: stitched for robust peak detection (full 6-8 second rolling window)
+        bpMetricBuffer = stitchBpWaveform(bpMetricBuffer, bpDisplaySegment, BP_STITCH_OVERLAP_SAMPLES, BP_DISPLAY_SAMPLES);
+
+        // Metrics computed from full rolling buffer
+        const bpMetrics = estimateBpWaveformMetrics(bpMetricBuffer, 100);
+        bpWaveform = bpDisplayBuffer;
+        bp = {
+          sbp: bpMetrics.sbp,
+          dbp: bpMetrics.dbp,
+          map: bpMetrics.map,
+        };
+
+        if (bpMetrics.map !== null && Number.isFinite(bpMetrics.map)) {
+          // Apply EMA smoothing to stabilize the baseline across inferences
+          meanBpEstimateMmHg = BP_MEAN_EMA_ALPHA * bpMetrics.map + (1 - BP_MEAN_EMA_ALPHA) * meanBpEstimateMmHg;
+        }
       }
     }
   }
@@ -340,8 +354,8 @@ const processWindow = async (): Promise<void> => {
       y: filteredSeries.values,
     },
     cwt,
-    bpWaveform: bpWaveform.length > 0 ? {
-      t: bpWindow.time.slice(-bpWaveform.length),
+    bpWaveform: bpWaveform.length > 0 && bpInputTime ? {
+      t: bpInputTime.slice(-bpWaveform.length),
       y: bpWaveform,
     } : undefined,
   };
@@ -375,6 +389,7 @@ self.onmessage = (event: MessageEvent<WorkerInMessage>) => {
     lastEmitMs = 0;
     bpModelError = null;
     meanBpEstimateMmHg = DEFAULT_MEAN_BP_MMHG;
+    bpDisplayBuffer = [];
     bpMetricBuffer = [];
     postMessage({
       type: "status",

@@ -1,3 +1,5 @@
+import type { RgbSample } from "@/utils/types";
+
 const EPS = 1e-8;
 
 type Complex = {
@@ -565,6 +567,38 @@ export const deriveIbisMs = (
 
   return ibis;
 };
+
+/**
+ * Extracts raw green-channel BVP signal from an RGB sample buffer.
+ * Paper III uses the green channel directly (not POS).
+ */
+export const extractGreenBvp = (
+  rgbSamples: RgbSample[],
+): { timestamps: number[]; values: number[] } => ({
+  timestamps: rgbSamples.map((s) => s.timestamp),
+  values: rgbSamples.map((s) => s.g),
+});
+
+/**
+ * Removes slow baseline wander by subtracting a heavily smoothed version of the signal.
+ * Matches Paper III's smooth-priors low-pass detrend step.
+ */
+export const detrendSignal = (
+  signal: number[],
+  smoothingWindowFraction = 0.25,
+): number[] => {
+  if (signal.length < 4) return signal;
+  const windowSize = Math.max(3, Math.floor(signal.length * smoothingWindowFraction));
+  const w = windowSize % 2 === 0 ? windowSize + 1 : windowSize;
+  const baseline = movingAverage(signal, w);
+  return signal.map((v, i) => v - baseline[i]);
+};
+
+/**
+ * Global z-score normalization: (x - μ) / σ over the entire signal.
+ * Paper III normalization. Falls back to zeros if std is near zero.
+ */
+export const globalZScoreNormalize = (signal: number[]): number[] => zScore(signal);
 
 export const refineIbis = (ibisMs: number[]): number[] => {
   if (ibisMs.length === 0) {
