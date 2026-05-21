@@ -305,21 +305,33 @@ export const reconstructBpWaveform = (
   }
 
   const meanOffsetMmHg = options.meanOffsetMmHg ?? DEFAULT_MEAN_BP_MMHG;
-  const waveformMean = mean(reconstructed);
-  const acComponent = reconstructed.map((v) => v - waveformMean);
+
+  // Step 1: Restore MAP offset so values are in mmHg scale (~93 mmHg center)
+  const withOffset = reconstructed.map((v) => v + meanOffsetMmHg);
+
+  // Step 2: Compute AC component (deviation from mean)
+  const waveformMean = mean(withOffset);
+  const acComponent = withOffset.map((v) => v - waveformMean);
   const acMax = Math.max(...acComponent);
   const acMin = Math.min(...acComponent);
   const acSpan = acMax - acMin;
+
   if (acSpan < 0.5) {
+    console.log("[BP-reconstruct] flat waveform, acSpan:", acSpan.toFixed(3));
     return [];
   }
+
+  // Step 3: Scale AC component to physiological pulse pressure
   const TARGET_PULSE_PRESSURE_MMHG = 40;
-  const scaleFactor = Math.min(TARGET_PULSE_PRESSURE_MMHG / acSpan, 15);
-  const scaled = acComponent.map((v) => v * scaleFactor + meanOffsetMmHg);
+  const scaleFactor = TARGET_PULSE_PRESSURE_MMHG / acSpan;
+
+  const scaled = acComponent.map((v) => v * scaleFactor + waveformMean);
+
   console.log("[BP-reconstruct] acSpan:", acSpan.toFixed(2),
     "scaleFactor:", scaleFactor.toFixed(2),
-    "final range:", (Math.min(...scaled)).toFixed(1),
-    "–", (Math.max(...scaled)).toFixed(1), "mmHg");
+    "final range:", Math.min(...scaled).toFixed(1),
+    "-", Math.max(...scaled).toFixed(1), "mmHg");
+
   return scaled;
 };
 
