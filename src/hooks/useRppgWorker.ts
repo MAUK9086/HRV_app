@@ -8,7 +8,6 @@ import type {
   RppgTelemetry,
   WavePoint,
 } from "@/utils/types";
-import { blendBpWaveform } from "@/utils/bp";
 
 type WorkerStatus = {
   calibrationProgress: number;
@@ -88,45 +87,7 @@ export const useRppgWorker = (): UseRppgWorkerReturn => {
             t,
             v: bpSeries.y[index] ?? 0,
           }));
-
-          setBpDisplayBuffer((previous) => {
-            if (previous.length === 0) {
-              return incoming.slice(-BP_DISPLAY_MAX_SAMPLES);
-            }
-
-            // Use 125-sample overlap (0.5s overlap window)
-            const overlapSamples = Math.min(125, previous.length, incoming.length);
-
-            // Calculate baseline means for alignment
-            const prevValues = previous.map((p) => p.v);
-            const incomingValues = incoming.map((p) => p.v);
-            const prevMean = prevValues.reduce((a, v) => a + v, 0) / prevValues.length;
-            const incomingMean = incomingValues.reduce((a, v) => a + v, 0) / incomingValues.length;
-            const baselineDrift = incomingMean - prevMean;
-
-            // Baseline align: remove incoming drift before blending
-            const alignedIncoming = incomingValues.map((v) => v - baselineDrift);
-
-            // Linear cross-fade blend for overlap region
-            const blendedValues = blendBpWaveform(
-              prevValues,
-              alignedIncoming,
-              overlapSamples,
-            );
-
-            // Build new display buffer with proper stitching
-            const prefix = previous.slice(0, previous.length - overlapSamples);
-            const blendedPoints = blendedValues.slice(0, overlapSamples).map((v, idx) => ({
-              t: incoming[idx]?.t ?? previous[previous.length - overlapSamples + idx]?.t ?? 0,
-              v,
-            }));
-            const tail = incoming.slice(overlapSamples).map((point) => ({
-              t: point.t,
-              v: point.v - baselineDrift,
-            }));
-
-            return [...prefix, ...blendedPoints, ...tail].slice(-BP_DISPLAY_MAX_SAMPLES);
-          });
+          setBpDisplayBuffer(incoming.slice(-BP_DISPLAY_MAX_SAMPLES));
         }
       }
     };

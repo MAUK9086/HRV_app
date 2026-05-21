@@ -1,4 +1,5 @@
 export type RgbSample = {
+  /** performance.now() milliseconds (monotonic, NOT Date.now()) */
   timestamp: number;
   r: number;
   g: number;

@@ -220,6 +220,11 @@ const robustExtrema = (
   };
 };
 
+/**
+ * Rescales a waveform to a user-supplied cuff BP target (SBP/DBP).
+ * Call this ONLY when the user has explicitly provided their known cuff reading.
+ * Do NOT call automatically — silent use produces fake 120/80 readings.
+ */
 export const calibrateBpWaveformMmHg = (
   waveform: number[],
   targetSbp = 120,
@@ -241,21 +246,6 @@ export const calibrateBpWaveformMmHg = (
   return mapped.map((value) => value + (targetMap - mappedMean));
 };
 
-const ensureMmHgLikeWaveform = (waveform: number[]): number[] => {
-  if (waveform.length === 0) {
-    return waveform;
-  }
-
-  const p95 = percentile(waveform, 0.95);
-  const p05 = percentile(waveform, 0.05);
-  const span = p95 - p05;
-
-  if (span < 20 || p95 < 70 || p95 > 220) {
-    return calibrateBpWaveformMmHg(waveform, 120, 80);
-  }
-
-  return waveform;
-};
 
 export const reconstructBpWaveform = (
   realPlane: number[][],
@@ -314,10 +304,11 @@ export const reconstructBpWaveform = (
     return [];
   }
 
-  // Scale amplitude to physiological range (20-40 mmHg pulse pressure)
+  // Minimal amplitude scaling: preserve pulse shape and relative amplitude
+  // Only scale if reconstruction is suspiciously small (< 1 mmHg range)
   const reconstructedStd = std(reconstructed);
-  const targetPulsePressure = 30;
-  const amplitudeScale = reconstructedStd > EPS ? targetPulsePressure / (2 * reconstructedStd) : 1;
+  const minPulseAmplitude = 1;
+  const amplitudeScale = reconstructedStd > EPS && reconstructedStd < minPulseAmplitude ? minPulseAmplitude / reconstructedStd : 1;
   const scaled = reconstructed.map((value) => value * amplitudeScale);
 
   // Restore mean arterial pressure
@@ -328,31 +319,35 @@ export const reconstructBpWaveform = (
 
 export const estimateBpWaveformMetrics = (waveform: number[], sampleRate = 100): BpWaveformMetrics => {
   if (waveform.length < 3) {
-    return {
-      waveform,
-      sbp: null,
-      dbp: null,
-      map: null,
-    };
+    return { waveform, sbp: null, dbp: null, map: null };
   }
 
   const smoothed = waveform.length > 5 ? movingAverage(waveform, 5) : waveform;
-  const mmHgWaveform = ensureMmHgLikeWaveform(smoothed);
-  const { systolic, diastolic } = robustExtrema(mmHgWaveform, sampleRate);
-  const sbp = systolic.length > 0 ? median(systolic) : percentile(mmHgWaveform, 0.95);
-  const dbp = diastolic.length > 0 ? median(diastolic) : percentile(mmHgWaveform, 0.05);
 
-  if (sbp === null || dbp === null) {
-    return {
-      waveform: mmHgWaveform,
-      sbp,
-      dbp,
-      map: null,
-    };
+  // Degenerate waveform: span too small to contain BP information
+  const p95 = percentile(smoothed, 0.95);
+  const p05 = percentile(smoothed, 0.05);
+  if (p95 - p05 < 20) {
+    return { waveform, sbp: null, dbp: null, map: null };
+  }
+
+  const { systolic, diastolic } = robustExtrema(smoothed, sampleRate);
+
+  // Too few systolic peaks for a reliable median estimate
+  if (systolic.length < 3) {
+    return { waveform, sbp: null, dbp: null, map: null };
+  }
+
+  const sbp = median(systolic);
+  const dbp = diastolic.length > 0 ? median(diastolic) : percentile(smoothed, 0.05);
+
+  // Physiologically impossible SBP — model likely failed
+  if (sbp < 70 || sbp > 220) {
+    return { waveform, sbp: null, dbp: null, map: null };
   }
 
   return {
-    waveform: mmHgWaveform,
+    waveform,
     sbp,
     dbp,
     map: (sbp + 2 * dbp) / 3,
