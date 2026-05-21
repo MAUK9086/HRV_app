@@ -58,7 +58,7 @@ export default function Home() {
 
           if (rgb) {
             pushSample({
-              timestamp: Date.now(),
+              timestamp: performance.now(),
               r: rgb.r,
               g: rgb.g,
               b: rgb.b,
