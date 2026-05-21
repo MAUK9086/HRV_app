@@ -42,7 +42,7 @@ const BP_CWT_RESOLUTION = 256;
 const RGB_MA_WINDOW = 5;
 const BP_DISPLAY_SAMPLES = 2000;
 const BP_STITCH_OVERLAP_SAMPLES = 125;
-const BP_MEAN_EMA_ALPHA = 0.3;
+const BP_MEAN_EMA_ALPHA = 0.05;
 const BP_MODEL_URL = process.env.NEXT_PUBLIC_BP_MODEL_URL?.trim() ?? "";
 const DEFAULT_MEAN_BP_MMHG = (120 + 2 * 80) / 3;
 
@@ -331,8 +331,10 @@ const processWindow = async (): Promise<void> => {
         };
 
         if (bpMetrics.map !== null && Number.isFinite(bpMetrics.map)) {
-          // Apply EMA smoothing to stabilize the baseline across inferences
-          meanBpEstimateMmHg = BP_MEAN_EMA_ALPHA * bpMetrics.map + (1 - BP_MEAN_EMA_ALPHA) * meanBpEstimateMmHg;
+          if (bpMetrics.map >= 60 && bpMetrics.map <= 115) {
+            meanBpEstimateMmHg = BP_MEAN_EMA_ALPHA * bpMetrics.map + (1 - BP_MEAN_EMA_ALPHA) * meanBpEstimateMmHg;
+          }
+          meanBpEstimateMmHg = Math.max(70, Math.min(120, meanBpEstimateMmHg));
         }
       }
     }

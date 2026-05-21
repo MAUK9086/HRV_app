@@ -373,6 +373,17 @@ export const estimateBpWaveformMetrics = (waveform: number[], sampleRate = 100):
     return { waveform, sbp: null, dbp: null, map: null };
   }
 
+  if (dbp < 40 || dbp > 120) {
+    console.debug("[BP-metrics] null: DBP out of physiological range:", dbp.toFixed(1));
+    return { waveform, sbp: null, dbp: null, map: null };
+  }
+
+  const pulsePressure = sbp - dbp;
+  if (pulsePressure < 10 || pulsePressure > 100) {
+    console.debug("[BP-metrics] null: impossible pulse pressure:", pulsePressure.toFixed(1));
+    return { waveform, sbp: null, dbp: null, map: null };
+  }
+
   console.debug("[BP-metrics] ✓ SBP:", sbp.toFixed(0), "DBP:", dbp.toFixed(0),
     "MAP:", ((sbp + 2 * dbp) / 3).toFixed(0));
   return {
