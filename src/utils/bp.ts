@@ -304,17 +304,23 @@ export const reconstructBpWaveform = (
     return [];
   }
 
-  // Minimal amplitude scaling: preserve pulse shape and relative amplitude
-  // Only scale if reconstruction is suspiciously small (< 1 mmHg range)
-  const reconstructedStd = std(reconstructed);
-  const minPulseAmplitude = 1;
-  const amplitudeScale = reconstructedStd > EPS && reconstructedStd < minPulseAmplitude ? minPulseAmplitude / reconstructedStd : 1;
-  const scaled = reconstructed.map((value) => value * amplitudeScale);
-
-  // Restore mean arterial pressure
-  const restoredMean = options.meanOffsetMmHg ?? DEFAULT_MEAN_BP_MMHG;
-  const scaledMean = mean(scaled);
-  return scaled.map((value) => value - scaledMean + restoredMean);
+  const meanOffsetMmHg = options.meanOffsetMmHg ?? DEFAULT_MEAN_BP_MMHG;
+  const waveformMean = mean(reconstructed);
+  const acComponent = reconstructed.map((v) => v - waveformMean);
+  const acMax = Math.max(...acComponent);
+  const acMin = Math.min(...acComponent);
+  const acSpan = acMax - acMin;
+  if (acSpan < 0.5) {
+    return [];
+  }
+  const TARGET_PULSE_PRESSURE_MMHG = 40;
+  const scaleFactor = Math.min(TARGET_PULSE_PRESSURE_MMHG / acSpan, 15);
+  const scaled = acComponent.map((v) => v * scaleFactor + meanOffsetMmHg);
+  console.log("[BP-reconstruct] acSpan:", acSpan.toFixed(2),
+    "scaleFactor:", scaleFactor.toFixed(2),
+    "final range:", (Math.min(...scaled)).toFixed(1),
+    "–", (Math.max(...scaled)).toFixed(1), "mmHg");
+  return scaled;
 };
 
 export const estimateBpWaveformMetrics = (waveform: number[], sampleRate = 100): BpWaveformMetrics => {
@@ -327,7 +333,7 @@ export const estimateBpWaveformMetrics = (waveform: number[], sampleRate = 100):
   // Degenerate waveform: span too small to contain BP information
   const p95 = percentile(smoothed, 0.95);
   const p05 = percentile(smoothed, 0.05);
-  if (p95 - p05 < 20) {
+  if (p95 - p05 < 15) {
     console.debug("[BP-metrics] null: span too small, p95-p05 =", (p95 - p05).toFixed(1));
     return { waveform, sbp: null, dbp: null, map: null };
   }
