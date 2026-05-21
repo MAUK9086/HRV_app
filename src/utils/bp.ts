@@ -304,6 +304,12 @@ export const reconstructBpWaveform = (
     return [];
   }
 
+  const rawMin = Math.min(...reconstructed);
+  const rawMax = Math.max(...reconstructed);
+  console.log("[BP-raw] reconstructed span before offset:",
+    (rawMax - rawMin).toFixed(6),
+    "mean:", (reconstructed.reduce((a, b) => a + b, 0) / reconstructed.length).toFixed(6));
+
   const meanOffsetMmHg = options.meanOffsetMmHg ?? DEFAULT_MEAN_BP_MMHG;
 
   // Step 1: Restore MAP offset so values are in mmHg scale (~93 mmHg center)
@@ -316,8 +322,8 @@ export const reconstructBpWaveform = (
   const acMin = Math.min(...acComponent);
   const acSpan = acMax - acMin;
 
-  if (acSpan < 0.5) {
-    console.log("[BP-reconstruct] flat waveform, acSpan:", acSpan.toFixed(3));
+  if (acSpan < EPS) {
+    console.log("[BP-reconstruct] flat waveform, acSpan:", acSpan.toFixed(6));
     return [];
   }
 
