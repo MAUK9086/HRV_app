@@ -328,6 +328,7 @@ export const estimateBpWaveformMetrics = (waveform: number[], sampleRate = 100):
   const p95 = percentile(smoothed, 0.95);
   const p05 = percentile(smoothed, 0.05);
   if (p95 - p05 < 20) {
+    console.debug("[BP-metrics] null: span too small, p95-p05 =", (p95 - p05).toFixed(1));
     return { waveform, sbp: null, dbp: null, map: null };
   }
 
@@ -335,6 +336,7 @@ export const estimateBpWaveformMetrics = (waveform: number[], sampleRate = 100):
 
   // Too few systolic peaks for a reliable median estimate
   if (systolic.length < 3) {
+    console.debug("[BP-metrics] null: only", systolic.length, "systolic peaks detected");
     return { waveform, sbp: null, dbp: null, map: null };
   }
 
@@ -343,9 +345,12 @@ export const estimateBpWaveformMetrics = (waveform: number[], sampleRate = 100):
 
   // Physiologically impossible SBP — model likely failed
   if (sbp < 70 || sbp > 220) {
+    console.debug("[BP-metrics] null: SBP out of range:", sbp.toFixed(1));
     return { waveform, sbp: null, dbp: null, map: null };
   }
 
+  console.debug("[BP-metrics] ✓ SBP:", sbp.toFixed(0), "DBP:", dbp.toFixed(0),
+    "MAP:", ((sbp + 2 * dbp) / 3).toFixed(0));
   return {
     waveform,
     sbp,

@@ -42,7 +42,7 @@ const BP_CWT_RESOLUTION = 256;
 const RGB_MA_WINDOW = 5;
 const BP_DISPLAY_SAMPLES = 2000;
 const BP_STITCH_OVERLAP_SAMPLES = 125;
-const BP_MEAN_EMA_ALPHA = 0.1;
+const BP_MEAN_EMA_ALPHA = 0.3;
 const BP_MODEL_URL = process.env.NEXT_PUBLIC_BP_MODEL_URL?.trim() ?? "";
 const DEFAULT_MEAN_BP_MMHG = (120 + 2 * 80) / 3;
 
@@ -210,7 +210,7 @@ const prepareBpModelInput = async (
   // Note: performCWT applies its own internal local normalization;
   // globalZScoreNormalize here primes the signal before that step.
   const normalized = globalZScoreNormalize(detrended);
-  const cwt = performCWT(normalized, 100, BP_CWT_RESOLUTION, BP_CWT_RESOLUTION);
+  const cwt = performCWT(normalized, 100, BP_CWT_RESOLUTION, BP_CWT_RESOLUTION, { skipInternalNorm: true });
   return { cwt, time: interpolated.t };
 };
 
@@ -302,6 +302,16 @@ const processWindow = async (): Promise<void> => {
 
     if (bpInput) {
       const bpDisplaySegment = await inferBpWaveform(bpInput.cwt, meanBpEstimateMmHg);
+
+      if (bpDisplaySegment.length > 0) {
+        const segMin = Math.min(...bpDisplaySegment);
+        const segMax = Math.max(...bpDisplaySegment);
+        console.debug("[BP-p2] segment length:", bpDisplaySegment.length,
+          "min:", segMin.toFixed(1), "max:", segMax.toFixed(1),
+          "span:", (segMax - segMin).toFixed(1), "mmHg");
+      } else {
+        console.debug("[BP-p2] inferBpWaveform returned empty array");
+      }
 
       if (bpDisplaySegment.length > 0) {
         // Decouple display and metric buffers:

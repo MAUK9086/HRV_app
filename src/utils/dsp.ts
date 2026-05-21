@@ -218,6 +218,7 @@ export const performCWT = (
   sampleRate = 30,
   scaleCount = 64,
   outputResolution = 128,
+  options?: { skipInternalNorm?: boolean },
 ): CwtResult => {
   if (signal.length === 0) {
     return {
@@ -227,10 +228,12 @@ export const performCWT = (
     };
   }
 
-  const normalized = normalizeSignal(signal, Math.min(64, Math.max(8, Math.floor(signal.length / 4))));
-  const paddedLength = nextPowerOfTwo(normalized.length * 2);
+  const workingSignal = options?.skipInternalNorm
+    ? signal
+    : normalizeSignal(signal, Math.min(64, Math.max(8, Math.floor(signal.length / 4))));
+  const paddedLength = nextPowerOfTwo(workingSignal.length * 2);
   const zeroPaddedSignal = new Array<Complex>(paddedLength).fill(null as unknown as Complex).map(
-    (_, index) => createComplex(index < normalized.length ? normalized[index] : 0, 0),
+    (_, index) => createComplex(index < workingSignal.length ? workingSignal[index] : 0, 0),
   );
   const signalFft = fft(zeroPaddedSignal);
 
@@ -250,7 +253,7 @@ export const performCWT = (
     const waveletFft = fft(wavelet);
     const spectrum = waveletFft.map((value, index) => complexMul(signalFft[index], complexConj(value)));
     const coefficients = inverseFft(spectrum);
-    const magnitude = coefficients.slice(0, normalized.length).map((value) => Math.hypot(value.re, value.im));
+    const magnitude = coefficients.slice(0, workingSignal.length).map((value) => Math.hypot(value.re, value.im));
     scalogram.push(resizeSeries(magnitude, outputResolution));
   }
 
