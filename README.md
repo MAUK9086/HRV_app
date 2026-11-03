@@ -1,36 +1,52 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# HRV from webcam (rPPG)
 
-## Getting Started
+A browser app that estimates pulse and heart-rate variability from an ordinary webcam using remote photoplethysmography (rPPG). Everything runs client-side; video never leaves the browser.
 
-First, run the development server:
+This is an experimental research tool, not a medical device. Readings depend heavily on lighting, motion and camera quality.
+
+## How it works
+
+1. **Face tracking.** MediaPipe Face Landmarker finds the face each frame. Three regions of interest are taken from the landmarks: forehead, left cheek and right cheek.
+2. **Colour signal.** The mean RGB of the regions is sampled per frame and smoothed with a short moving average.
+3. **Pulse signal.** The POS (plane-orthogonal-to-skin) method turns the RGB traces into a blood volume pulse signal, which is band-pass filtered (Butterworth) and resampled with a cubic spline.
+4. **Beats and intervals.** Peaks are detected on the cleaned signal, converted to inter-beat intervals and filtered for outliers.
+5. **Metrics.** Over a rolling 30 s window the app reports pulse, SDNN, RMSSD, LF/HF ratio, Baevsky stress index and a coherence score.
+
+Signal processing runs in a Web Worker so the UI stays responsive.
+
+### Blood pressure (optional, experimental)
+
+If a TensorFlow.js graph model is provided, the app also reconstructs a blood-pressure waveform from 8 s windows of the pulse signal (via a continuous wavelet transform) and reports SBP, DBP and MAP. The model is not included in this repo. Without it, the BP panel stays empty. Treat any BP numbers from camera signals with a lot of caution.
+
+## Running it
 
 ```bash
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open http://localhost:3000 and allow camera access. Sit still, face the camera in even light, and give it about 30 s to fill the window.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+To enable the BP panel, point the app at a TF.js graph model:
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```bash
+# .env.local
+NEXT_PUBLIC_BP_MODEL_URL=https://<host>/model.json
+```
 
-## Learn More
+## Layout
 
-To learn more about Next.js, take a look at the following resources:
+```
+src/
+  app/          page and layout (Next.js App Router)
+  components/   camera feed, metrics panel, pulse chart
+  hooks/        camera, MediaPipe and worker hooks
+  utils/        dsp.ts (filters, POS, peaks, CWT), hrv.ts, bp.ts, roi.ts
+  workers/      rppg.worker.ts (signal pipeline)
+```
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Stack
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+Next.js, React, TypeScript, MediaPipe Tasks Vision, TensorFlow.js, Recharts, Tailwind CSS.
 
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+See also [serenepulse](https://github.com/MAUK9086/serenepulse), a Python version of the rPPG pipeline with a FastAPI live server.
